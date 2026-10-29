@@ -551,7 +551,7 @@ void autoBrightnessTick() {
 // ============================================================================
 // Direct Stream OTA Update (Follows GitHub 302 -> AWS S3 redirect reliably)
 // ============================================================================
-bool performDirectOTA(const String &downloadUrl) {
+bool performDirectOTA(const String &downloadUrl, String &failReason) {
     Serial.printf("[OTA] Resolving download URL: %s\n", downloadUrl.c_str());
 
     String finalUrl = downloadUrl;
@@ -578,7 +578,17 @@ bool performDirectOTA(const String &downloadUrl) {
             if (loc.length() > 0) {
                 finalUrl = loc;
                 Serial.printf("[OTA] Found S3 direct URL: %s\n", finalUrl.c_str());
+            } else {
+                Serial.println("[OTA] Redirect 302 but Location header empty!");
+                failReason = "NO REDIRECT LOC";
+                http.end();
+                return false;
             }
+        } else if (code != 200) {
+            Serial.printf("[OTA] Unexpected redirect check code: %d\n", code);
+            failReason = String("GH HTTP ") + code;
+            http.end();
+            return false;
         }
         http.end();
     }
@@ -598,6 +608,7 @@ bool performDirectOTA(const String &downloadUrl) {
 
         if (httpCode != HTTP_CODE_OK) {
             Serial.printf("[OTA] S3 GET failed, code: %d\n", httpCode);
+            failReason = String("S3 HTTP ") + httpCode;
             http.end();
             return false;
         }
@@ -607,12 +618,14 @@ bool performDirectOTA(const String &downloadUrl) {
 
         if (contentLength <= 0) {
             Serial.println("[OTA] Invalid content length");
+            failReason = "BAD CONTENT-LEN";
             http.end();
             return false;
         }
 
         if (!Update.begin(contentLength)) {
             Serial.printf("[OTA] Update.begin failed! Error: %s\n", Update.errorString());
+            failReason = String("UPD ERR ") + Update.getError();
             http.end();
             return false;
         }
@@ -654,17 +667,20 @@ bool performDirectOTA(const String &downloadUrl) {
 
         if (totalWritten != (size_t)contentLength) {
             Serial.printf("[OTA] Written %u / %d bytes, incomplete!\n", totalWritten, contentLength);
+            failReason = "STREAM INCOMPLETE";
             Update.abort();
             return false;
         }
 
         if (!Update.end()) {
             Serial.printf("[OTA] Update.end failed! Error: %s\n", Update.errorString());
+            failReason = "UPDATE END FAIL";
             return false;
         }
 
         if (!Update.isFinished()) {
             Serial.println("[OTA] Update not finished!");
+            failReason = "NOT FINISHED";
             return false;
         }
 
@@ -738,16 +754,18 @@ void checkGitHubOTA(bool manual) {
 
                     switchMode(MUSE_MODE_LAPTOP);
 
-                    bool ok = performDirectOTA(bin_url);
+                    String failReason = "FAIL";
+                    bool ok = performDirectOTA(bin_url, failReason);
                     if (ok) {
                         Serial.println("[OTA] Update OK! Rebooting...");
                         tft.drawString("SUCCESS! REBOOT...", 226, 195, 1);
                         delay(1000);
                         ESP.restart();
                     } else {
-                        Serial.println("[OTA] Update failed!");
-                        tft.drawString("UPDATE FAILED", 226, 195, 1);
-                        delay(2000);
+                        Serial.printf("[OTA] Update failed: %s\n", failReason.c_str());
+                        tft.drawString(failReason, 226, 195, 1);
+                        delay(3500);
+                        tft.fillRect(136, 145, 180, 68, COLOR_BG);
                     }
                 }
             } else {

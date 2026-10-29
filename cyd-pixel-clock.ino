@@ -552,87 +552,125 @@ void autoBrightnessTick() {
 // Direct Stream OTA Update (Follows GitHub 302 -> AWS S3 redirect reliably)
 // ============================================================================
 bool performDirectOTA(const String &downloadUrl) {
-    Serial.printf("[OTA] Starting direct OTA download from: %s\n", downloadUrl.c_str());
+    Serial.printf("[OTA] Resolving download URL: %s\n", downloadUrl.c_str());
 
-    WiFiClientSecure otaClient;
-    otaClient.setInsecure();
+    String finalUrl = downloadUrl;
 
-    HTTPClient http;
-    http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
-    http.setTimeout(15000);
-    http.begin(otaClient, downloadUrl);
-    http.addHeader("User-Agent", "CYD-Pixel-Clock");
+    // STEP 1: Resolve 302 Redirect from GitHub to AWS S3
+    {
+        WiFiClientSecure client;
+        client.setInsecure();
 
-    int httpCode = http.GET();
-    Serial.printf("[OTA] HTTP code: %d\n", httpCode);
+        HTTPClient http;
+        http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+        http.setTimeout(12000);
+        http.begin(client, downloadUrl);
+        http.addHeader("User-Agent", "CYD-Pixel-Clock");
 
-    if (httpCode != HTTP_CODE_OK) {
-        Serial.printf("[OTA] HTTP GET failed, code: %d\n", httpCode);
-        http.end();
-        return false;
-    }
+        const char *headerKeys[] = {"Location"};
+        http.collectHeaders(headerKeys, 1);
 
-    int contentLength = http.getSize();
-    Serial.printf("[OTA] Content-Length: %d bytes\n", contentLength);
+        int code = http.GET();
+        Serial.printf("[OTA] Redirect check code: %d\n", code);
 
-    if (contentLength <= 0) {
-        Serial.println("[OTA] Invalid content length");
-        http.end();
-        return false;
-    }
-
-    if (!Update.begin(contentLength)) {
-        Serial.printf("[OTA] Update.begin failed! Error: %s\n", Update.errorString());
-        http.end();
-        return false;
-    }
-
-    NetworkClient *stream = http.getStreamPtr();
-    uint8_t buff[1024];
-    size_t totalWritten = 0;
-    int lastPct = -1;
-
-    while (http.connected() && (totalWritten < (size_t)contentLength)) {
-        size_t availableBytes = stream->available();
-        if (availableBytes > 0) {
-            size_t bytesToRead = (availableBytes > sizeof(buff)) ? sizeof(buff) : availableBytes;
-            size_t bytesRead = stream->readBytes(buff, bytesToRead);
-
-            size_t bytesWritten = Update.write(buff, bytesRead);
-            if (bytesWritten > 0) {
-                totalWritten += bytesWritten;
-            }
-
-            int pct = (totalWritten * 100) / contentLength;
-            if (pct != lastPct) {
-                lastPct = pct;
-                tft.fillRect(144, 203, 164, 4, COLOR_GRAY_DARK);
-                tft.fillRect(144, 203, (164 * pct) / 100, 4, COLOR_BG);
+        if (code == 301 || code == 302) {
+            String loc = http.header("Location");
+            if (loc.length() > 0) {
+                finalUrl = loc;
+                Serial.printf("[OTA] Found S3 direct URL: %s\n", finalUrl.c_str());
             }
         }
-        delay(1);
+        http.end();
     }
 
-    http.end();
+    // STEP 2: Download stream from final URL with a fresh client socket
+    {
+        WiFiClientSecure otaClient;
+        otaClient.setInsecure();
 
-    if (totalWritten != (size_t)contentLength) {
-        Serial.printf("[OTA] Written %u / %d bytes, incomplete!\n", totalWritten, contentLength);
-        Update.abort();
-        return false;
+        HTTPClient http;
+        http.setTimeout(25000);
+        http.begin(otaClient, finalUrl);
+        http.addHeader("User-Agent", "CYD-Pixel-Clock");
+
+        int httpCode = http.GET();
+        Serial.printf("[OTA] S3 GET code: %d\n", httpCode);
+
+        if (httpCode != HTTP_CODE_OK) {
+            Serial.printf("[OTA] S3 GET failed, code: %d\n", httpCode);
+            http.end();
+            return false;
+        }
+
+        int contentLength = http.getSize();
+        Serial.printf("[OTA] Content-Length: %d bytes\n", contentLength);
+
+        if (contentLength <= 0) {
+            Serial.println("[OTA] Invalid content length");
+            http.end();
+            return false;
+        }
+
+        if (!Update.begin(contentLength)) {
+            Serial.printf("[OTA] Update.begin failed! Error: %s\n", Update.errorString());
+            http.end();
+            return false;
+        }
+
+        NetworkClient *stream = http.getStreamPtr();
+        uint8_t buff[1024];
+        size_t totalWritten = 0;
+        int lastPct = -1;
+        unsigned long lastDataTime = millis();
+
+        while (http.connected() && (totalWritten < (size_t)contentLength)) {
+            size_t availableBytes = stream->available();
+            if (availableBytes > 0) {
+                lastDataTime = millis();
+                size_t bytesToRead = (availableBytes > sizeof(buff)) ? sizeof(buff) : availableBytes;
+                size_t bytesRead = stream->readBytes(buff, bytesToRead);
+
+                size_t bytesWritten = Update.write(buff, bytesRead);
+                if (bytesWritten > 0) {
+                    totalWritten += bytesWritten;
+                }
+
+                int pct = (totalWritten * 100) / contentLength;
+                if (pct != lastPct) {
+                    lastPct = pct;
+                    tft.fillRect(144, 203, 164, 4, COLOR_GRAY_DARK);
+                    tft.fillRect(144, 203, (164 * pct) / 100, 4, COLOR_BG);
+                }
+            } else {
+                if (millis() - lastDataTime > 10000) {
+                    Serial.println("[OTA] Stream read timeout!");
+                    break;
+                }
+            }
+            delay(1);
+        }
+
+        http.end();
+
+        if (totalWritten != (size_t)contentLength) {
+            Serial.printf("[OTA] Written %u / %d bytes, incomplete!\n", totalWritten, contentLength);
+            Update.abort();
+            return false;
+        }
+
+        if (!Update.end()) {
+            Serial.printf("[OTA] Update.end failed! Error: %s\n", Update.errorString());
+            return false;
+        }
+
+        if (!Update.isFinished()) {
+            Serial.println("[OTA] Update not finished!");
+            return false;
+        }
+
+        Serial.println("[OTA] Update successful!");
+        return true;
     }
-
-    if (!Update.end()) {
-        Serial.printf("[OTA] Update.end failed! Error: %s\n", Update.errorString());
-        return false;
-    }
-
-    if (!Update.isFinished()) {
-        Serial.println("[OTA] Update not finished!");
-        return false;
-    }
-
-    Serial.println("[OTA] Update successful!");
-    return true;
 }
 
 // ============================================================================

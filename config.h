@@ -5,6 +5,13 @@
 // ============================================================================
 #define TFT_BL          21
 #define BOOT_BTN        0
+#define LDR_PIN         34      // Ambient light sensor (ADC1_CH6)
+
+// Auto-Brightness limits
+#define BRIGHT_MIN_PCT  3       // Minimum 3% in dark
+#define BRIGHT_MAX_PCT  90      // Maximum 90% in bright light
+#define LDR_BRIGHT_ADC  200     // ADC value in bright light
+#define LDR_DARK_ADC    2400    // ADC value in dark room
 
 // Touch Controller (XPT2046 over HSPI)
 #define TOUCH_CS        33
@@ -22,7 +29,7 @@
 // ============================================================================
 // Firmware & OTA Configuration
 // ============================================================================
-#define FIRMWARE_VERSION "v1.0.3"
+#define FIRMWARE_VERSION "v1.0.4"
 #define GITHUB_REPO      "trongphuc2810/cyd-pixel-clock"
 
 // ============================================================================

@@ -25,6 +25,9 @@ muse_mode_t currentMode = MUSE_MODE_IDLE;
 muse_mode_t baseMode = MUSE_MODE_IDLE; // User selected: IDLE or LAPTOP (Phone)
 bool isHappyReaction = false;
 bool cfgInvert = true; // FIX: CYD ST7789 panel requires inverted display colors
+int currentBrightness = 60; // 3..90 %
+int ldrFiltered = -1;
+unsigned long lastBrightnessTick = 0;
 unsigned long reactionStartTime = 0;
 unsigned long modeStartTime = 0;
 unsigned long lastTouchTime = 0;
@@ -54,6 +57,8 @@ void drawOTAButton();
 void checkGitHubOTA(bool manual);
 void renderMuseFrame();
 void showAPSetupScreen();
+void setBrightness(int pct);
+void autoBrightnessTick();
 
 // ── WiFiManager AP Callback ─────────────────────────────────────────────────
 void configModeCallback(WiFiManager *myWiFiManager) {
@@ -84,9 +89,12 @@ void setup() {
 
     tft.fillScreen(COLOR_BG);
 
-    // Backlight on CYD
-    pinMode(TFT_BL, OUTPUT);
-    digitalWrite(TFT_BL, HIGH);
+    // Backlight on CYD via PWM (5kHz, 8-bit resolution)
+    ledcAttach(TFT_BL, 5000, 8);
+    setBrightness(60); // Initial 60%
+
+    // LDR Light Sensor Pin
+    pinMode(LDR_PIN, INPUT);
 
     // 2. Initialize Touchscreen
     touchSPI.begin(TOUCH_CLK, TOUCH_MISO, TOUCH_MOSI, TOUCH_CS);
@@ -245,7 +253,10 @@ void loop() {
         updateClockDisplay();
     }
 
-    // 5. Periodic GitHub OTA Check (every 24 hours, silent)
+    // 5. Ambient Light Auto-Brightness Adjustment (every 250ms)
+    autoBrightnessTick();
+
+    // 6. Periodic GitHub OTA Check (every 24 hours, silent)
     if (WiFi.status() == WL_CONNECTED && (now - lastOTACheck >= 86400000UL)) {
         lastOTACheck = now;
         checkGitHubOTA(false);
@@ -488,6 +499,53 @@ void showAPSetupScreen() {
     tft.setTextDatum(BL_DATUM);
     tft.setTextColor(COLOR_GRAY_MID, COLOR_BG);
     tft.drawString("WAITING FOR PHONE...", 136, 234, 1);
+}
+
+// ============================================================================
+// Auto-Brightness Logic (LDR on GPIO34: 3% minimum, 90% maximum)
+// ============================================================================
+void setBrightness(int pct) {
+    currentBrightness = constrain(pct, BRIGHT_MIN_PCT, BRIGHT_MAX_PCT);
+    int duty = (currentBrightness * 255) / 100;
+    ledcWrite(TFT_BL, duty);
+}
+
+void autoBrightnessTick() {
+    unsigned long now = millis();
+    if (now - lastBrightnessTick < 250) return;
+    lastBrightnessTick = now;
+
+    // Multi-sample LDR ADC (10 samples for noise rejection)
+    uint32_t sum = 0;
+    for (int i = 0; i < 10; i++) {
+        sum += analogRead(LDR_PIN);
+    }
+    int raw = sum / 10;
+
+    // Exponential Moving Average filter (smooth transitions without flicker)
+    if (ldrFiltered < 0) {
+        ldrFiltered = raw;
+    } else {
+        ldrFiltered += (raw - ldrFiltered) / 8;
+    }
+
+    // Map raw LDR reading to percentage (Lower raw = brighter light; Higher raw = darker room)
+    int targetPct;
+    if (ldrFiltered <= LDR_BRIGHT_ADC) {
+        targetPct = BRIGHT_MAX_PCT; // 90%
+    } else if (ldrFiltered >= LDR_DARK_ADC) {
+        targetPct = BRIGHT_MIN_PCT; // 3%
+    } else {
+        float ratio = (float)(ldrFiltered - LDR_BRIGHT_ADC) / (float)(LDR_DARK_ADC - LDR_BRIGHT_ADC);
+        targetPct = BRIGHT_MAX_PCT - (int)(ratio * (BRIGHT_MAX_PCT - BRIGHT_MIN_PCT));
+    }
+
+    targetPct = constrain(targetPct, BRIGHT_MIN_PCT, BRIGHT_MAX_PCT);
+
+    // Apply deadband of 2% to avoid micro-adjustments
+    if (abs(targetPct - currentBrightness) >= 2) {
+        setBrightness(targetPct);
+    }
 }
 
 // ============================================================================

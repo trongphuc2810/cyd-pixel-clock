@@ -531,16 +531,17 @@ void checkGitHubOTA(bool manual) {
             Serial.printf("[OTA] Latest tag: %s, current: %s\n", tag_name, FIRMWARE_VERSION);
 
             if (tag_name && strcmp(tag_name, FIRMWARE_VERSION) != 0) {
-                // Find .bin download URL
+                // Find firmware.bin download URL specifically
                 JsonArray assets = doc["assets"];
                 String bin_url = "";
                 for (JsonObject asset : assets) {
                     const char* name = asset["name"];
-                    if (name && strstr(name, ".bin")) {
+                    if (name && (strcmp(name, "firmware.bin") == 0 || strstr(name, ".bin"))) {
                         bin_url = asset["browser_download_url"].as<String>();
                         break;
                     }
                 }
+                http.end(); // Free API HTTP connection and heap before starting OTA download
 
                 if (bin_url.length() > 0) {
                     Serial.printf("[OTA] Downloading: %s\n", bin_url.c_str());
@@ -564,8 +565,10 @@ void checkGitHubOTA(bool manual) {
                         }
                     });
 
+                    WiFiClientSecure otaClient;
+                    otaClient.setInsecure();
                     httpUpdate.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-                    t_httpUpdate_return ret = httpUpdate.update(client, bin_url);
+                    t_httpUpdate_return ret = httpUpdate.update(otaClient, bin_url);
                     if (ret == HTTP_UPDATE_OK) {
                         Serial.println("[OTA] Update OK! Rebooting...");
                         tft.drawString("SUCCESS! REBOOT...", 226, 195, 1);

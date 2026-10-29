@@ -72,8 +72,9 @@ void setup() {
     // 1. Initialize Display
     tft.init();
     tft.setRotation(1); // 320x240 landscape
+    tft.setSwapBytes(true); // FIX: Crucial for pushImage 16-bit byte order on ESP32
 
-    // Load inversion & BGR preference (Default TRUE for CYD ST7789)
+    // Load inversion preference (Default TRUE for CYD ST7789)
     prefs.begin("cyd_clock", false);
     cfgInvert = prefs.getBool("invert", true);
     tft.invertDisplay(cfgInvert);

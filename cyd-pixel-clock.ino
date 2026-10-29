@@ -89,12 +89,14 @@ void setup() {
 
     tft.fillScreen(COLOR_BG);
 
+    // ADC Resolution & Attenuation for LDR on GPIO34 (Full 0 - 3.3V range)
+    analogReadResolution(12);
+    analogSetPinAttenuation(LDR_PIN, ADC_11db);
+    pinMode(LDR_PIN, INPUT);
+
     // Backlight on CYD via PWM (5kHz, 8-bit resolution)
     ledcAttach(TFT_BL, 5000, 8);
     setBrightness(60); // Initial 60%
-
-    // LDR Light Sensor Pin
-    pinMode(LDR_PIN, INPUT);
 
     // 2. Initialize Touchscreen
     touchSPI.begin(TOUCH_CLK, TOUCH_MISO, TOUCH_MOSI, TOUCH_CS);
@@ -512,24 +514,25 @@ void setBrightness(int pct) {
 
 void autoBrightnessTick() {
     unsigned long now = millis();
-    if (now - lastBrightnessTick < 250) return;
+    if (now - lastBrightnessTick < 200) return;
     lastBrightnessTick = now;
 
-    // Multi-sample LDR ADC (10 samples for noise rejection)
+    // Multi-sample LDR ADC (16 samples)
     uint32_t sum = 0;
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < 16; i++) {
         sum += analogRead(LDR_PIN);
     }
-    int raw = sum / 10;
+    int raw = sum / 16;
 
-    // Exponential Moving Average filter (smooth transitions without flicker)
+    // Exponential Moving Average filter (faster response: / 4)
     if (ldrFiltered < 0) {
         ldrFiltered = raw;
     } else {
-        ldrFiltered += (raw - ldrFiltered) / 8;
+        ldrFiltered += (raw - ldrFiltered) / 4;
     }
 
-    // Map raw LDR reading to percentage (Lower raw = brighter light; Higher raw = darker room)
+    // Map: raw nhỏ = phòng sáng (LDR_BRIGHT_ADC ~200) -> 90%
+    //      raw lớn = trời tối   (LDR_DARK_ADC ~1700)  -> 3%
     int targetPct;
     if (ldrFiltered <= LDR_BRIGHT_ADC) {
         targetPct = BRIGHT_MAX_PCT; // 90%
@@ -537,13 +540,13 @@ void autoBrightnessTick() {
         targetPct = BRIGHT_MIN_PCT; // 3%
     } else {
         float ratio = (float)(ldrFiltered - LDR_BRIGHT_ADC) / (float)(LDR_DARK_ADC - LDR_BRIGHT_ADC);
-        targetPct = BRIGHT_MAX_PCT - (int)(ratio * (BRIGHT_MAX_PCT - BRIGHT_MIN_PCT));
+        targetPct = BRIGHT_MAX_PCT - (int)(ratio * (BRIGHT_MAX_PCT - BRIGHT_MIN_PCT) + 0.5f);
     }
 
     targetPct = constrain(targetPct, BRIGHT_MIN_PCT, BRIGHT_MAX_PCT);
 
-    // Apply deadband of 2% to avoid micro-adjustments
-    if (abs(targetPct - currentBrightness) >= 2) {
+    // Update if changed
+    if (targetPct != currentBrightness) {
         setBrightness(targetPct);
     }
 }

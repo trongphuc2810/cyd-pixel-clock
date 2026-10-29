@@ -44,6 +44,10 @@ typedef struct {
 extern "C" {
 #endif
 
+/* Set color channel order: true = BGR (for ST7789 BGR on CYD), false = RGB */
+void muse_pixel_set_bgr(bool bgr);
+bool muse_pixel_get_bgr(void);
+
 /* Accent colour of a mode (for the surrounding UI), as 0xRRGGBB. */
 uint32_t muse_pixel_accent(muse_mode_t mode);
 

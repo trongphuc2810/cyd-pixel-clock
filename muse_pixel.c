@@ -176,13 +176,30 @@ static inline rgb_t scale_rgb(rgb_t a, float k)
     return (rgb_t){ a.r * k, a.g * k, a.b * k };
 }
 
+static bool s_color_bgr = true; // Default TRUE for CYD ST7789 BGR panel
+
+void muse_pixel_set_bgr(bool bgr)
+{
+    s_color_bgr = bgr;
+    s_scheme_init = false;
+}
+
+bool muse_pixel_get_bgr(void)
+{
+    return s_color_bgr;
+}
+
 static inline uint16_t to565(rgb_t c)
 {
     int r = (int)(c.r + 0.5f), g = (int)(c.g + 0.5f), b = (int)(c.b + 0.5f);
     r = r < 0 ? 0 : (r > 255 ? 255 : r);
     g = g < 0 ? 0 : (g > 255 ? 255 : g);
     b = b < 0 ? 0 : (b > 255 ? 255 : b);
-    return (uint16_t)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+    if (s_color_bgr) {
+        return (uint16_t)(((b >> 3) << 11) | ((g >> 2) << 5) | (r >> 3));
+    } else {
+        return (uint16_t)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+    }
 }
 
 uint32_t muse_pixel_accent(muse_mode_t mode)

@@ -73,10 +73,13 @@ void setup() {
     tft.init();
     tft.setRotation(1); // 320x240 landscape
 
-    // Load inversion preference (Default TRUE for CYD ST7789)
+    // Load inversion & BGR preference (Default TRUE for CYD ST7789)
     prefs.begin("cyd_clock", false);
     cfgInvert = prefs.getBool("invert", true);
     tft.invertDisplay(cfgInvert);
+
+    bool cfgBgr = prefs.getBool("bgr", true);
+    muse_pixel_set_bgr(cfgBgr);
 
     tft.fillScreen(COLOR_BG);
 
@@ -157,6 +160,16 @@ void loop() {
             tft.invertDisplay(cfgInvert);
             prefs.putBool("invert", cfgInvert);
             Serial.printf("[DISPLAY] Inversion toggled: %d\n", cfgInvert);
+            delay(300);
+            return;
+        }
+
+        // Special: Tap state badge (tx >= 60 && tx < 130 && ty < 24) to toggle RGB/BGR color order
+        if (tx >= 60 && tx < 130 && ty < 24) {
+            bool bgr = !muse_pixel_get_bgr();
+            muse_pixel_set_bgr(bgr);
+            prefs.putBool("bgr", bgr);
+            Serial.printf("[DISPLAY] BGR toggled: %d\n", bgr);
             delay(300);
             return;
         }
